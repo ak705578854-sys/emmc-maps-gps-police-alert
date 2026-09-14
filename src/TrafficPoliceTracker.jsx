@@ -38,7 +38,7 @@ function isValidGPS(latitude, longitude) {
   );
 }
 
-export default function TrafficPoliceTracker() {
+export default function TrafficPoliceTracker({ onStartMap, mapOpen = false, logoutNonce = 0 }) {
   const [policeId, setPoliceId] = useState("");
   const [loggedIn, setLoggedIn] = useState(false);
 
@@ -56,6 +56,23 @@ export default function TrafficPoliceTracker() {
 
   const watchIdRef = useRef(null);
 
+  // When the map is closed from its STOP GPS button, stop the police GPS watch.
+  useEffect(() => {
+    if (!mapOpen && watchIdRef.current !== null) {
+      navigator.geolocation?.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+  }, [mapOpen]);
+
+  // Logout requested by the parent (for example from the map screen).
+  const lastLogoutNonceRef = useRef(logoutNonce);
+  useEffect(() => {
+    if (logoutNonce !== lastLogoutNonceRef.current) {
+      lastLogoutNonceRef.current = logoutNonce;
+      logout();
+    }
+  }, [logoutNonce]);
+
   // ENABLE MOBILE BROWSER NOTIFICATIONS
   const urlBase64ToUint8Array = (base64String) => {
     const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -65,40 +82,87 @@ export default function TrafficPoliceTracker() {
   };
 
   const enableMobileAlerts = async () => {
-    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
-      setError("इस mobile browser में Web Push support नहीं है। Android Chrome/Edge या installed PWA इस्तेमाल करें।");
+    setError("");
+
+    if (window.isSecureContext !== true) {
+      setMobileAlertEnabled(false);
+      setError("Mobile Alerts के लिए यह EMMC Vercel HTTPS site खोलें। HTTP/IP address से Push काम नहीं करेगा।");
       return;
     }
+
+    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+      setMobileAlertEnabled(false);
+      setError("इस browser में Web Push support नहीं है। Android Chrome/Edge में EMMC site खोलें।");
+      return;
+    }
+
     try {
-      const permission = await Notification.requestPermission();
+      const permission = Notification.permission === "granted"
+        ? "granted"
+        : await Notification.requestPermission();
+
       if (permission !== "granted") {
         setMobileAlertEnabled(false);
-        setError("Notification permission Allow करें।");
+        setError("Browser Notification permission को Allow करें, फिर Enable Mobile Alerts दोबारा दबाएँ।");
         return;
       }
-      const registration = await navigator.serviceWorker.register("/sw.js");
-      const keyResponse = await fetch(`${BACKEND_URL}/api/push/public-key`);
+
+      // Register the service worker before creating the push subscription.
+      const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      await navigator.serviceWorker.ready;
+
+      // Check the Render backend first. This gives a useful error instead of
+      // the old generic “Backend और HTTPS check करें” message.
+      const healthResponse = await fetch(`${BACKEND_URL}/api/health`, { cache: "no-store" });
+      if (!healthResponse.ok) {
+        throw new Error(`Backend health failed (HTTP ${healthResponse.status})`);
+      }
+      const health = await healthResponse.json();
+      if (!health?.ok) {
+        throw new Error("Backend health check returned an invalid response");
+      }
+      if (!health?.pushConfigured) {
+        throw new Error("Render backend VAPID keys are not configured");
+      }
+
+      const keyResponse = await fetch(`${BACKEND_URL}/api/push/public-key`, { cache: "no-store" });
+      if (!keyResponse.ok) {
+        throw new Error(`VAPID public-key endpoint failed (HTTP ${keyResponse.status})`);
+      }
       const keyData = await keyResponse.json();
-      if (!keyData.publicKey) throw new Error("Backend VAPID public key is missing");
+      if (!keyData?.publicKey || typeof keyData.publicKey !== "string") {
+        throw new Error("VAPID public key missing on Render");
+      }
+
       let subscription = await registration.pushManager.getSubscription();
+
+      // If an old subscription exists, reuse it. If the browser rejects it
+      // while subscribing, remove the stale subscription and create a fresh one.
       if (!subscription) {
         subscription = await registration.pushManager.subscribe({
           userVisibleOnly: true,
           applicationServerKey: urlBase64ToUint8Array(keyData.publicKey),
         });
       }
-      const saveResponse = await fetch(`${BACKEND_URL}/api/push/subscribe`, {
+
+      let saveResponse = await fetch(`${BACKEND_URL}/api/push/subscribe`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ policeId: AUTHORIZED_POLICE_ID, subscription }),
       });
-      if (!saveResponse.ok) throw new Error("Push subscription save failed");
+
+      if (!saveResponse.ok) {
+        const saveText = await saveResponse.text().catch(() => "");
+        throw new Error(`Push subscription save failed (HTTP ${saveResponse.status})${saveText ? `: ${saveText}` : ""}`);
+      }
+
       setMobileAlertEnabled(true);
       setError("");
+      setStatus("🔔 Mobile Alerts Enabled • Ready to start GPS");
     } catch (err) {
-      console.error(err);
+      console.error("Mobile Push setup error:", err);
       setMobileAlertEnabled(false);
-      setError("Mobile Push setup नहीं हो पाया। Backend और HTTPS check करें।");
+      setError(`Mobile Push setup failed: ${err?.message || "Unknown error"}`);
     }
   };
 
@@ -109,6 +173,9 @@ export default function TrafficPoliceTracker() {
     const socket = io(BACKEND_URL);
     socket.on("connect", () => socket.emit("registerPolice", { policeId: AUTHORIZED_POLICE_ID }));
     const handlePoliceAlert = (data) => {
+      // Traffic alerts are intentionally shown/delivered in the police UI only
+      // after the officer has enabled Mobile Alerts.
+      if (!mobileAlertEnabled) return;
       if (data?.ambulanceId !== AMBULANCE_ID) return;
       if (data?.policeId && data.policeId !== AUTHORIZED_POLICE_ID) return;
 
@@ -143,6 +210,7 @@ export default function TrafficPoliceTracker() {
     });
 
     socket.on("ambulanceLocation", (data) => {
+      if (!mobileAlertEnabled) return;
       if (data?.ambulanceId !== AMBULANCE_ID) return;
       const latitude = Number(data?.latitude);
       const longitude = Number(data?.longitude);
@@ -157,7 +225,7 @@ export default function TrafficPoliceTracker() {
     });
 
     return () => socket.disconnect();
-  }, [loggedIn, location]);
+  }, [loggedIn, location, mobileAlertEnabled]);
 
   // BACKEND CHECK
   useEffect(() => {
@@ -197,6 +265,11 @@ export default function TrafficPoliceTracker() {
   // START GPS
   const startGPS = () => {
     setError("");
+
+    if (!mobileAlertEnabled) {
+      setError("पहले Enable Mobile Alerts पर click करके alerts enable करें।");
+      return;
+    }
 
     if (!navigator.geolocation) {
       setStatus("GPS unavailable");
@@ -272,6 +345,9 @@ export default function TrafficPoliceTracker() {
             setStatus(
               "🟢 Live GPS • Location Sent"
             );
+
+            // Open the full EMMC map only after the first real GPS fix is received.
+            onStartMap?.();
 
             console.log(
               "🚔 REAL POLICE GPS:",
@@ -499,7 +575,7 @@ export default function TrafficPoliceTracker() {
             {mobileAlertEnabled ? "🔔 Mobile Alerts Enabled" : "🔔 Enable Mobile Alerts"}
           </button>
 
-          {ambulanceNearby && (
+          {mobileAlertEnabled && ambulanceNearby && (
             <div
               style={{
                 padding: "14px",
@@ -521,7 +597,7 @@ export default function TrafficPoliceTracker() {
             </div>
           )}
 
-          {/* TRAFFIC ALERTS — visible at the bottom of the police screen */}
+          {/* TRAFFIC ALERTS — visible only after Mobile Alerts are enabled */}
           <div
             style={{
               padding: "16px",
