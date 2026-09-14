@@ -250,7 +250,7 @@ function MapRecenter({ location }) {
 // MAIN COMPONENT
 // =====================================================
 
-export default function LiveMap() {
+export default function LiveMap({ onStopGPS, onLogout }) {
 
   // ===================================================
   // AMBULANCE GPS
@@ -1264,6 +1264,15 @@ export default function LiveMap() {
   return (
 
     <section className="map-card">
+
+      {/* POLICE CONTROLS — always visible above the map */}
+      <div className="map-top-controls">
+        <div className="map-live-label">🚔 Traffic Police • {AUTHORIZED_POLICE_ID} • 🟢 LIVE GPS</div>
+        <div className="map-control-buttons">
+          <button className="map-stop-button" onClick={onStopGPS}>⛔ STOP GPS</button>
+          <button className="map-logout-button" onClick={onLogout}>🚪 LOGOUT</button>
+        </div>
+      </div>
 
       {/* =================================================
           MAP
