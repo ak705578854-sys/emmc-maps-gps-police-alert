@@ -231,6 +231,22 @@ function formatDistance(km) {
 }
 
 // =====================================================
+// MAP AUTO CENTER
+// =====================================================
+
+function MapRecenter({ location }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (isValidLocation(location)) {
+      map.setView(location);
+    }
+  }, [location, map]);
+
+  return null;
+}
+
+// =====================================================
 // MAIN COMPONENT
 // =====================================================
 
@@ -1304,14 +1320,53 @@ export default function LiveMap({ onStopGPS, onLogout }) {
           doubleClickZoom={true}
           zoomControl={true}
           keyboard={true}
-          // Map center is intentionally controlled only by the initial `center`.
-          // Live GPS updates move markers, not the map viewport.
         >
+
+          <MapRecenter
+            location={
+              ambulanceLocation
+            }
+          />
 
           <TileLayer
             attribution="&copy; OpenStreetMap contributors"
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
+
+          {/* ===========================================
+              AMBULANCE
+          =========================================== */}
+
+          <Marker
+            position={
+              ambulanceLocation
+            }
+            icon={ambulanceIcon}
+          >
+
+            <Popup>
+
+              🚑{" "}
+
+              <b>
+                Ambulance {AMBULANCE_ID}
+              </b>
+
+              <br />
+
+              {actualAmbulanceGPS
+                ? "LIVE GPS"
+                : "Demo / Waiting for GPS"}
+
+              {ambulanceHeading !== null && (
+                <>
+                  <br />🧭 Direction: {Math.round(ambulanceHeading)}°
+                </>
+              )}
+
+            </Popup>
+
+          </Marker>
 
           {/* ===========================================
               ALL LIVE AMBULANCES
@@ -1525,7 +1580,6 @@ export default function LiveMap({ onStopGPS, onLogout }) {
         <div className="status" style={{ marginTop: "8px" }}>
           🚑 <b>Ambulances Online:</b> {Object.keys(ambulanceLocations).length}
           {Object.keys(ambulanceLocations).length > 1 && " • Multiple ambulance tracking enabled"}
-          <br />Supported IDs: <b>AMB102, AMB103, AMB104, AMB105, AMB106</b>
         </div>
 
         {Object.keys(ambulanceAlerts).length > 0 && (
