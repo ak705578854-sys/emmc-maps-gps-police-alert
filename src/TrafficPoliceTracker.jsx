@@ -176,7 +176,7 @@ export default function TrafficPoliceTracker({ onStartMap, mapOpen = false, logo
       // Traffic alerts are intentionally shown/delivered in the police UI only
       // after the officer has enabled Mobile Alerts.
       if (!mobileAlertEnabled) return;
-      if (data?.ambulanceId !== AMBULANCE_ID) return;
+      if (!data?.ambulanceId) return;
       if (data?.policeId && data.policeId !== AUTHORIZED_POLICE_ID) return;
 
       const distanceMeters = Number(data?.data?.distanceMeters ?? data?.distanceMeters);
@@ -211,7 +211,7 @@ export default function TrafficPoliceTracker({ onStartMap, mapOpen = false, logo
 
     socket.on("ambulanceLocation", (data) => {
       if (!mobileAlertEnabled) return;
-      if (data?.ambulanceId !== AMBULANCE_ID) return;
+      if (!data?.ambulanceId) return;
       const latitude = Number(data?.latitude);
       const longitude = Number(data?.longitude);
       if (!isValidGPS(latitude, longitude) || !location) return;
