@@ -6,7 +6,6 @@ import {
   Popup,
   Polyline,
   Circle,
-  useMap,
 } from "react-leaflet";
 import { io } from "socket.io-client";
 import L from "leaflet";
@@ -228,22 +227,6 @@ function formatDistance(km) {
   }
 
   return `${km.toFixed(2)} km`;
-}
-
-// =====================================================
-// MAP AUTO CENTER
-// =====================================================
-
-function MapRecenter({ location }) {
-  const map = useMap();
-
-  useEffect(() => {
-    if (isValidLocation(location)) {
-      map.setView(location);
-    }
-  }, [location, map]);
-
-  return null;
 }
 
 // =====================================================
@@ -1283,6 +1266,42 @@ export default function LiveMap({ onStopGPS, onLogout }) {
   ]);
 
   // ===================================================
+  // DEMO FLEET — AMB102 to AMB106
+  // ===================================================
+
+  const sendDemoFleet = async () => {
+    // Demo ambulances are intentionally placed close to the demo hospital,
+    // so the demo route distance stays realistic instead of hundreds of km.
+    const demoFleet = [
+      { ambulanceId: "AMB102", dLat: 0.0020, dLng: 0.0000 },
+      { ambulanceId: "AMB103", dLat: -0.0020, dLng: 0.0010 },
+      { ambulanceId: "AMB104", dLat: 0.0010, dLng: -0.0020 },
+      { ambulanceId: "AMB105", dLat: -0.0010, dLng: -0.0020 },
+      { ambulanceId: "AMB106", dLat: 0.0005, dLng: 0.0025 },
+    ];
+
+    for (const amb of demoFleet) {
+      try {
+        await fetch(`${BACKEND_URL}/api/ambulance/location`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ambulanceId: amb.ambulanceId,
+            latitude: DEMO_HOSPITAL[0] + amb.dLat,
+            longitude: DEMO_HOSPITAL[1] + amb.dLng,
+            destination: DEMO_HOSPITAL_NAME,
+            emergencyCategory: "Critical / High Priority",
+            heading: 90,
+          }),
+        });
+      } catch (error) {
+        console.warn("Demo fleet send failed", amb.ambulanceId, error);
+      }
+    }
+    setPoliceStatus("🧪 Demo Fleet Sent • AMB102–AMB106");
+  };
+
+  // ===================================================
   // UI
   // ===================================================
 
@@ -1321,12 +1340,6 @@ export default function LiveMap({ onStopGPS, onLogout }) {
           zoomControl={true}
           keyboard={true}
         >
-
-          <MapRecenter
-            location={
-              ambulanceLocation
-            }
-          />
 
           <TileLayer
             attribution="&copy; OpenStreetMap contributors"
@@ -1580,6 +1593,22 @@ export default function LiveMap({ onStopGPS, onLogout }) {
         <div className="status" style={{ marginTop: "8px" }}>
           🚑 <b>Ambulances Online:</b> {Object.keys(ambulanceLocations).length}
           {Object.keys(ambulanceLocations).length > 1 && " • Multiple ambulance tracking enabled"}
+        </div>
+
+        <div style={{ marginTop: "10px", marginBottom: "10px" }}>
+          <button
+            onClick={sendDemoFleet}
+            style={{
+              padding: "10px 14px",
+              borderRadius: "10px",
+              border: "1px solid #cbd5e1",
+              background: "#eef6ff",
+              cursor: "pointer",
+              fontWeight: 700,
+            }}
+          >
+            🧪 Send 5 Demo Ambulances (AMB102–AMB106)
+          </button>
         </div>
 
         {Object.keys(ambulanceAlerts).length > 0 && (
