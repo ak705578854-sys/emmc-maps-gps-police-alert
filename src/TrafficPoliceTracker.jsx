@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
-import { BACKEND_URL, AUTHORIZED_POLICE_ID, AMBULANCE_ID, POLICE_ALERT_RADIUS_KM } from "./config";
+import { BACKEND_URL, AUTHORIZED_POLICE_ID, POLICE_ALERT_RADIUS_KM } from "./config";
 
 function distanceKm(a, b) {
   if (!a || !b) return null;
@@ -50,6 +50,7 @@ export default function TrafficPoliceTracker({ onStartMap, mapOpen = false, logo
 
   const [lastUpdated, setLastUpdated] = useState(null);
   const [ambulanceNearby, setAmbulanceNearby] = useState(null);
+  const [ambulanceDistances, setAmbulanceDistances] = useState({});
   const [trafficAlerts, setTrafficAlerts] = useState([]);
   const [mobileAlertEnabled, setMobileAlertEnabled] = useState(false);
   const lastAlertRef = useRef(null);
@@ -173,45 +174,55 @@ export default function TrafficPoliceTracker({ onStartMap, mapOpen = false, logo
     const socket = io(BACKEND_URL);
     socket.on("connect", () => socket.emit("registerPolice", { policeId: AUTHORIZED_POLICE_ID }));
     const handlePoliceAlert = (data) => {
-      // Traffic alerts are intentionally shown/delivered in the police UI only
-      // after the officer has enabled Mobile Alerts.
+      // Accept alerts from every ambulance, not only AMB102.
       if (!mobileAlertEnabled) return;
-      if (!data?.ambulanceId) return;
       if (data?.policeId && data.policeId !== AUTHORIZED_POLICE_ID) return;
+      const ambulanceId = String(data?.ambulanceId || data?.data?.ambulanceId || "").trim();
+      if (!ambulanceId) return;
+      
 
-      const distanceMeters = Number(data?.data?.distanceMeters ?? data?.distanceMeters);
+      // Backend distance is authoritative for an alert; client GPS distance is
+      // used only as a live fallback when both coordinates are available.
+      const rawDistance = data?.data?.distanceMeters ?? data?.distanceMeters;
+      const distanceMeters = Number(rawDistance);
       const alert = {
-        id: `${Date.now()}-${Math.random()}`,
+        id: `${ambulanceId}-${Date.now()}-${Math.random()}`,
+        ambulanceId,
         time: new Date(),
-        distanceMeters: Number.isFinite(distanceMeters) ? distanceMeters : null,
+        distanceMeters: Number.isFinite(distanceMeters) ? Math.max(0, Math.round(distanceMeters)) : null,
         emergencyCategory: data?.data?.emergencyCategory || data?.emergencyCategory || 'Critical / High Priority',
         destination: data?.data?.destination || data?.destination || 'Emergency Hospital',
         message: data?.message || data?.body || 'Please clear traffic / jam and assist the ambulance.',
       };
       setTrafficAlerts((prev) => [alert, ...prev].slice(0, 10));
+      if (Number.isFinite(distanceMeters)) {
+        setAmbulanceDistances((prev) => ({ ...prev, [ambulanceId]: Math.max(0, Math.round(distanceMeters)) }));
+        setAmbulanceNearby((prev) => ({ ...(prev || {}), ambulanceId, distance: distanceMeters / 1000 }));
+      }
       showMobileNotification(
-        data?.title || '🚨 EMMC Traffic Alert',
+        data?.title || `🚨 EMMC Traffic Alert • ${ambulanceId}`,
         data?.body || alert.message
       );
-      setAmbulanceNearby((prev) => ({
-        ...(prev || {}),
-        distance: Number.isFinite(distanceMeters) ? distanceMeters / 1000 : (prev?.distance ?? null),
-      }));
     };
 
     socket.on('policeAlert', handlePoliceAlert);
     socket.on('trafficPoliceAlert', handlePoliceAlert);
 
     socket.on('trafficPoliceAlertCleared', (data) => {
-      if (!data?.ambulanceId || data.ambulanceId === AMBULANCE_ID) {
-        setTrafficAlerts((prev) => prev);
-        lastAlertRef.current = null;
-      }
+      const ambulanceId = String(data?.ambulanceId || '').trim();
+      if (!ambulanceId) return;
+      setTrafficAlerts((prev) => prev.filter((alert) => alert.ambulanceId !== ambulanceId));
+      setAmbulanceDistances((prev) => {
+        const next = { ...prev };
+        delete next[ambulanceId];
+        return next;
+      });
+      setAmbulanceNearby((prev) => prev?.ambulanceId === ambulanceId ? null : prev);
     });
 
     socket.on("ambulanceLocation", (data) => {
-      if (!mobileAlertEnabled) return;
-      if (!data?.ambulanceId) return;
+      const ambulanceId = String(data?.ambulanceId || '').trim();
+      if (!ambulanceId) return;
       const latitude = Number(data?.latitude);
       const longitude = Number(data?.longitude);
       if (!isValidGPS(latitude, longitude) || !location) return;
@@ -220,8 +231,10 @@ export default function TrafficPoliceTracker({ onStartMap, mapOpen = false, logo
         { latitude: location.latitude, longitude: location.longitude },
         { latitude, longitude }
       );
-      setAmbulanceNearby({ latitude, longitude, distance });
-      if (distance !== null && distance > POLICE_ALERT_RADIUS_KM) lastAlertRef.current = null;
+      if (distance === null) return;
+      const distanceMeters = Math.max(0, Math.round(distance * 1000));
+      setAmbulanceDistances((prev) => ({ ...prev, [ambulanceId]: distanceMeters }));
+      setAmbulanceNearby({ ambulanceId, latitude, longitude, distance });
     });
 
     return () => socket.disconnect();
@@ -345,9 +358,6 @@ export default function TrafficPoliceTracker({ onStartMap, mapOpen = false, logo
             setStatus(
               "🟢 Live GPS • Location Sent"
             );
-
-            // Open the full EMMC map only after the first real GPS fix is received.
-            onStartMap?.();
 
             console.log(
               "🚔 REAL POLICE GPS:",
@@ -575,25 +585,27 @@ export default function TrafficPoliceTracker({ onStartMap, mapOpen = false, logo
             {mobileAlertEnabled ? "🔔 Mobile Alerts Enabled" : "🔔 Enable Mobile Alerts"}
           </button>
 
-          {mobileAlertEnabled && ambulanceNearby && (
+          {mobileAlertEnabled && (
             <div
               style={{
                 padding: "14px",
                 borderRadius: "10px",
-                background: ambulanceNearby.distance <= 1 ? "#fee2e2" : "#f3f4f6",
-                border: ambulanceNearby.distance <= 1 ? "1px solid #ef4444" : "1px solid #e5e7eb",
+                background: "#eff6ff",
+                border: "1px solid #bfdbfe",
                 marginBottom: "12px",
               }}
             >
-              <b>{ambulanceNearby.distance <= 1 ? "🚨 AMBULANCE WITHIN 1 KM" : "🚑 Ambulance Distance"}</b>
-              <div style={{ marginTop: "6px" }}>
-                Distance: <b>{Math.round(ambulanceNearby.distance * 1000)} m</b>
+              <b>🚑 Live Ambulance Distances</b>
+              <div style={{ marginTop: "8px" }}>
+                {Object.entries(ambulanceDistances).length > 0 ? Object.entries(ambulanceDistances).map(([id, meters]) => {
+                  const inRadius = Number.isFinite(meters) && meters <= POLICE_ALERT_RADIUS_KM * 1000;
+                  return (
+                    <div key={id} style={{ marginTop: "7px", padding: "8px 10px", borderRadius: "8px", background: inRadius ? "#fee2e2" : "#f8fafc" }}>
+                      <b>{id}</b>: {Number.isFinite(meters) ? <><b>{meters} m</b> {inRadius ? "🚨 WITHIN 1 KM" : ""}</> : <span style={{ color: "#64748b" }}>Waiting for GPS</span>}
+                    </div>
+                  );
+                }) : <div style={{ color: "#64748b" }}>Waiting for real ambulance GPS...</div>}
               </div>
-              {ambulanceNearby.distance <= 1 && (
-                <div style={{ marginTop: "6px" }}>
-                  ⚠️ Critical / High Priority — take action to clear traffic.
-                </div>
-              )}
             </div>
           )}
 
@@ -623,7 +635,7 @@ export default function TrafficPoliceTracker({ onStartMap, mapOpen = false, logo
                     marginBottom: "8px",
                   }}
                 >
-                  <b>🚑 Ambulance {AMBULANCE_ID} — WITHIN 1 KM</b>
+                  <b>🚑 Ambulance {alert.ambulanceId} — WITHIN 1 KM</b>
                   <div style={{ marginTop: 6 }}>
                     📏 Distance: <b>{alert.distanceMeters == null ? "Within 1 km" : `${alert.distanceMeters} m`}</b>
                   </div>
