@@ -231,22 +231,6 @@ function formatDistance(km) {
 }
 
 // =====================================================
-// MAP AUTO CENTER
-// =====================================================
-
-function MapRecenter({ location }) {
-  const map = useMap();
-
-  useEffect(() => {
-    if (isValidLocation(location)) {
-      map.setView(location);
-    }
-  }, [location, map]);
-
-  return null;
-}
-
-// =====================================================
 // MAIN COMPONENT
 // =====================================================
 
@@ -261,6 +245,11 @@ export default function LiveMap({ onStopGPS, onLogout }) {
 
   const [backendLocation, setBackendLocation] =
     useState(null);
+
+  // All ambulances currently known by the backend. Each ambulance has its
+  // own ID, GPS location and emergency details. There is no 1-ambulance limit.
+  const [ambulanceLocations, setAmbulanceLocations] = useState({});
+  const [ambulanceAlerts, setAmbulanceAlerts] = useState({});
 
   // ===================================================
   // TRAFFIC POLICE ACTUAL LIVE GPS
@@ -508,27 +497,35 @@ export default function LiveMap({ onStopGPS, onLogout }) {
           );
 
         if (
-          data?.ambulanceId ===
-            AMBULANCE_ID &&
-          isValidCoordinate(
-            latitude,
-            longitude
-          )
+          data?.ambulanceId &&
+          isValidCoordinate(latitude, longitude)
         ) {
-
+          const ambulanceId = String(data.ambulanceId);
           const nextLocation = [latitude, longitude];
-          const previous = previousAmbulanceLocationRef.current;
-          if (previous) {
-            setAmbulanceHeading(bearingDegrees(previous, nextLocation));
+
+          // Keep every ambulance, not just AMB102.
+          setAmbulanceLocations((prev) => ({
+            ...prev,
+            [ambulanceId]: {
+              ...prev[ambulanceId],
+              ...data,
+              ambulanceId,
+              latitude,
+              longitude,
+              updatedAt: data.updatedAt || Date.now(),
+            },
+          }));
+
+          // AMB102 remains the primary ambulance for the existing route/GPS UI.
+          if (ambulanceId === AMBULANCE_ID) {
+            const previous = previousAmbulanceLocationRef.current;
+            if (previous) {
+              setAmbulanceHeading(bearingDegrees(previous, nextLocation));
+            }
+            previousAmbulanceLocationRef.current = nextLocation;
+            setBackendLocation(nextLocation);
+            setLastUpdated(new Date());
           }
-          previousAmbulanceLocationRef.current = nextLocation;
-
-          setBackendLocation(nextLocation);
-
-          setLastUpdated(
-            new Date()
-          );
-
         }
 
       }
@@ -639,23 +636,15 @@ export default function LiveMap({ onStopGPS, onLogout }) {
         );
 
         if (
-          data?.ambulanceId ===
-            AMBULANCE_ID &&
-          (
-            !data?.policeId ||
-            data.policeId ===
-              AUTHORIZED_POLICE_ID
-          )
+          data?.ambulanceId &&
+          (!data?.policeId || data.policeId === AUTHORIZED_POLICE_ID)
         ) {
-
-          setTrafficPoliceAlert(
-            data
-          );
-
-          setPoliceStatus(
-            "🚨 Alert Triggered • LIVE GPS"
-          );
-
+          setAmbulanceAlerts((prev) => ({
+            ...prev,
+            [String(data.ambulanceId)]: data,
+          }));
+          setTrafficPoliceAlert(data);
+          setPoliceStatus("🚨 Alert Triggered • LIVE GPS");
         }
 
       }
@@ -663,7 +652,11 @@ export default function LiveMap({ onStopGPS, onLogout }) {
 
     // Backend's authoritative police-room alert event.
     socket.on("policeAlert", (data) => {
-      if (data?.ambulanceId === AMBULANCE_ID && (!data?.policeId || data.policeId === AUTHORIZED_POLICE_ID)) {
+      if (data?.ambulanceId && (!data?.policeId || data.policeId === AUTHORIZED_POLICE_ID)) {
+        setAmbulanceAlerts((prev) => ({
+          ...prev,
+          [String(data.ambulanceId)]: data,
+        }));
         setTrafficPoliceAlert(data);
         setPoliceStatus("🚨 Alert Triggered • LIVE GPS");
       }
@@ -682,20 +675,17 @@ export default function LiveMap({ onStopGPS, onLogout }) {
           data
         );
 
-        if (
-          !data?.ambulanceId ||
-          data.ambulanceId ===
-            AMBULANCE_ID
-        ) {
-
-          setTrafficPoliceAlert(
-            null
+        if (data?.ambulanceId) {
+          const ambulanceId = String(data.ambulanceId);
+          setAmbulanceAlerts((prev) => {
+            const next = { ...prev };
+            delete next[ambulanceId];
+            return next;
+          });
+          setTrafficPoliceAlert((current) =>
+            current?.ambulanceId === ambulanceId ? null : current
           );
-
-          setPoliceStatus(
-            "LIVE GPS • Outside 1 KM"
-          );
-
+          setPoliceStatus("LIVE GPS • Outside 1 KM");
         }
 
       }
@@ -947,6 +937,25 @@ export default function LiveMap({ onStopGPS, onLogout }) {
     }
 
     getPoliceLocation();
+
+    // Load all ambulances that were already online before this map opened.
+    fetch(`${BACKEND_URL}/api/ambulances`)
+      .then((response) => {
+        if (!response.ok) throw new Error(`Backend returned ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        const list = Array.isArray(data?.ambulances) ? data.ambulances : [];
+        const next = {};
+        for (const amb of list) {
+          const id = amb?.ambulanceId;
+          if (id && isValidCoordinate(Number(amb.latitude), Number(amb.longitude))) {
+            next[String(id)] = { ...amb, latitude: Number(amb.latitude), longitude: Number(amb.longitude) };
+          }
+        }
+        setAmbulanceLocations(next);
+      })
+      .catch((error) => console.warn("All ambulances request failed:", error.message));
 
   }, []);
 
@@ -1295,13 +1304,9 @@ export default function LiveMap({ onStopGPS, onLogout }) {
           doubleClickZoom={true}
           zoomControl={true}
           keyboard={true}
+          // Map center is intentionally controlled only by the initial `center`.
+          // Live GPS updates move markers, not the map viewport.
         >
-
-          <MapRecenter
-            location={
-              ambulanceLocation
-            }
-          />
 
           <TileLayer
             attribution="&copy; OpenStreetMap contributors"
@@ -1309,39 +1314,33 @@ export default function LiveMap({ onStopGPS, onLogout }) {
           />
 
           {/* ===========================================
-              AMBULANCE
+              ALL LIVE AMBULANCES
           =========================================== */}
 
-          <Marker
-            position={
-              ambulanceLocation
-            }
-            icon={ambulanceIcon}
-          >
-
-            <Popup>
-
-              🚑{" "}
-
-              <b>
-                Ambulance {AMBULANCE_ID}
-              </b>
-
-              <br />
-
-              {actualAmbulanceGPS
-                ? "LIVE GPS"
-                : "Demo / Waiting for GPS"}
-
-              {ambulanceHeading !== null && (
-                <>
-                  <br />🧭 Direction: {Math.round(ambulanceHeading)}°
-                </>
-              )}
-
-            </Popup>
-
-          </Marker>
+          {Object.values(ambulanceLocations).map((amb) => {
+            const position = [Number(amb.latitude), Number(amb.longitude)];
+            const isPrimary = amb.ambulanceId === AMBULANCE_ID;
+            return (
+              <Marker
+                key={`ambulance-${amb.ambulanceId}`}
+                position={position}
+                icon={ambulanceIcon}
+              >
+                <Popup>
+                  🚑 <b>Ambulance {amb.ambulanceId}</b>
+                  <br />🟢 LIVE GPS
+                  <br />📍 {Number(amb.latitude).toFixed(6)}, {Number(amb.longitude).toFixed(6)}
+                  {amb.emergencyCategory && (<>
+                    <br />⚠️ {amb.emergencyCategory}
+                  </>)}
+                  {amb.destination && (<>
+                    <br />🏥 {amb.destination}
+                  </>)}
+                  {isPrimary && <><br />⭐ Primary demo ambulance</>}
+                </Popup>
+              </Marker>
+            );
+          })}
 
           {/* ===========================================
               HOSPITAL
@@ -1518,6 +1517,30 @@ export default function LiveMap({ onStopGPS, onLogout }) {
           {backendStatus}
 
         </div>
+
+        {/* =============================================
+            ALL AMBULANCE TRAFFIC ALERTS
+        ============================================= */}
+
+        <div className="status" style={{ marginTop: "8px" }}>
+          🚑 <b>Ambulances Online:</b> {Object.keys(ambulanceLocations).length}
+          {Object.keys(ambulanceLocations).length > 1 && " • Multiple ambulance tracking enabled"}
+          <br />Supported IDs: <b>AMB102, AMB103, AMB104, AMB105, AMB106</b>
+        </div>
+
+        {Object.keys(ambulanceAlerts).length > 0 && (
+          <div className="alert">
+            <h3>🚨 Traffic Alerts — All Ambulances</h3>
+            {Object.values(ambulanceAlerts).map((alert) => (
+              <div key={`alert-${alert.ambulanceId}`} style={{ marginBottom: "10px", paddingBottom: "10px", borderBottom: "1px solid rgba(0,0,0,.12)" }}>
+                🚑 <b>{alert.ambulanceId}</b> — {alert.body || "Ambulance is within 1 km."}
+                <br />📏 Distance: <b>{alert.data?.distanceMeters ?? "—"} m</b>
+                <br />⚠️ Emergency: <b>{alert.emergencyCategory || alert.data?.emergencyCategory || "Critical / High Priority"}</b>
+                <br />🏥 Destination: <b>{alert.destination || alert.data?.destination || "Emergency Hospital"}</b>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* =============================================
             AMBULANCE GPS
