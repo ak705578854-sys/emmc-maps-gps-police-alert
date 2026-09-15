@@ -15,13 +15,11 @@ import "leaflet/dist/leaflet.css";
 // CONFIG
 // =====================================================
 
-import { BACKEND_URL, AMBULANCE_ID, AUTHORIZED_POLICE_ID, POLICE_ALERT_RADIUS_KM } from "./config";
+import { BACKEND_URL, AMBULANCE_ID as DEFAULT_AMBULANCE_ID, AUTHORIZED_POLICE_ID, POLICE_ALERT_RADIUS_KM } from "./config";
 
-const DEMO_AMBULANCE = [23.3441, 85.3096];
+const HOSPITAL_LOCATION = [23.356343, 85.323337];
 
-const DEMO_HOSPITAL = [23.356343, 85.323337];
-
-const DEMO_HOSPITAL_NAME =
+const HOSPITAL_LOCATION_NAME =
   "Raj Hospital and Research Center, Ranchi";
 
 // =====================================================
@@ -233,7 +231,16 @@ function formatDistance(km) {
 // MAIN COMPONENT
 // =====================================================
 
-export default function LiveMap({ onStopGPS, onLogout }) {
+export default function LiveMap({ onStopGPS, onLogout, ambulanceId = "" }) {
+
+  // Each real ambulance device identifies itself with its own unique ID.
+  // The ID is stored only on this device and is used for every GPS update.
+  const [deviceAmbulanceId, setDeviceAmbulanceId] = useState(() => {
+    try { return ambulanceId || localStorage.getItem("emmc_ambulance_id") || DEFAULT_AMBULANCE_ID; }
+    catch { return DEFAULT_AMBULANCE_ID; }
+  });
+  const [idSaved, setIdSaved] = useState(true);
+
 
   // ===================================================
   // AMBULANCE GPS
@@ -339,9 +346,7 @@ export default function LiveMap({ onStopGPS, onLogout }) {
       return gpsLocation;
     }
 
-    // Demo location is ONLY used for map/route.
-    // It is NEVER used for police distance.
-    return DEMO_AMBULANCE;
+    return null;
 
   }, [
     backendLocation,
@@ -516,7 +521,7 @@ export default function LiveMap({ onStopGPS, onLogout }) {
           }));
 
           // AMB102 remains the primary ambulance for the existing route/GPS UI.
-          if (ambulanceId === AMBULANCE_ID) {
+          if (ambulanceId === deviceAmbulanceId) {
             const previous = previousAmbulanceLocationRef.current;
             if (previous) {
               setAmbulanceHeading(bearingDegrees(previous, nextLocation));
@@ -964,6 +969,11 @@ export default function LiveMap({ onStopGPS, onLogout }) {
 
   useEffect(() => {
 
+    if (!deviceAmbulanceId.trim()) {
+      setGpsError("Ambulance ID is required before starting real GPS.");
+      return;
+    }
+
     if (
       !navigator.geolocation
     ) {
@@ -1051,7 +1061,7 @@ export default function LiveMap({ onStopGPS, onLogout }) {
                   body:
                     JSON.stringify({
                       ambulanceId:
-                        AMBULANCE_ID,
+                        deviceAmbulanceId,
 
                       latitude,
 
@@ -1154,7 +1164,7 @@ export default function LiveMap({ onStopGPS, onLogout }) {
           toLat,
           toLng,
         ] =
-          DEMO_HOSPITAL;
+          HOSPITAL_LOCATION;
 
         const url =
           `https://router.project-osrm.org/route/v1/driving/` +
@@ -1266,48 +1276,35 @@ export default function LiveMap({ onStopGPS, onLogout }) {
   ]);
 
   // ===================================================
-  // DEMO FLEET — AMB102 to AMB106
-  // ===================================================
-
-  const sendDemoFleet = async () => {
-    // Demo ambulances are intentionally placed close to the demo hospital,
-    // so the demo route distance stays realistic instead of hundreds of km.
-    const demoFleet = [
-      { ambulanceId: "AMB102", dLat: 0.0020, dLng: 0.0000 },
-      { ambulanceId: "AMB103", dLat: -0.0020, dLng: 0.0010 },
-      { ambulanceId: "AMB104", dLat: 0.0010, dLng: -0.0020 },
-      { ambulanceId: "AMB105", dLat: -0.0010, dLng: -0.0020 },
-      { ambulanceId: "AMB106", dLat: 0.0005, dLng: 0.0025 },
-    ];
-
-    for (const amb of demoFleet) {
-      try {
-        await fetch(`${BACKEND_URL}/api/ambulance/location`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ambulanceId: amb.ambulanceId,
-            latitude: DEMO_HOSPITAL[0] + amb.dLat,
-            longitude: DEMO_HOSPITAL[1] + amb.dLng,
-            destination: DEMO_HOSPITAL_NAME,
-            emergencyCategory: "Critical / High Priority",
-            heading: 90,
-          }),
-        });
-      } catch (error) {
-        console.warn("Demo fleet send failed", amb.ambulanceId, error);
-      }
-    }
-    setPoliceStatus("🧪 Demo Fleet Sent • AMB102–AMB106");
-  };
-
-  // ===================================================
   // UI
   // ===================================================
 
   return (
 
     <section className="map-card">
+
+      <div style={{ marginBottom: "12px", padding: "12px", border: "1px solid #cbd5e1", borderRadius: "10px", background: "#f8fafc" }}>
+        <b>🚑 Real Ambulance Device ID</b>
+        <div style={{ display: "flex", gap: "8px", marginTop: "8px", flexWrap: "wrap" }}>
+          <input
+            value={deviceAmbulanceId}
+            onChange={(e) => setDeviceAmbulanceId(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, ""))}
+            placeholder="e.g. AMB102"
+            style={{ padding: "9px", borderRadius: "8px", border: "1px solid #94a3b8", minWidth: "150px" }}
+          />
+          <button
+            onClick={() => {
+              const id = deviceAmbulanceId.trim();
+              if (!id) return;
+              localStorage.setItem("emmc_ambulance_id", id);
+              setIdSaved(true);
+              window.location.reload();
+            }}
+            style={{ padding: "9px 12px", borderRadius: "8px", border: "1px solid #94a3b8", cursor: "pointer", fontWeight: 700 }}
+          >Save Ambulance ID</button>
+        </div>
+        <small style={{ display: "block", marginTop: "6px" }}>This device sends only its real GPS location to the EMMC backend. Use a different unique ID on every ambulance phone.</small>
+      </div>
 
       {/* POLICE CONTROLS — always visible above the map */}
       <div className="map-top-controls">
@@ -1350,10 +1347,9 @@ export default function LiveMap({ onStopGPS, onLogout }) {
               AMBULANCE
           =========================================== */}
 
+          {ambulanceLocation && (
           <Marker
-            position={
-              ambulanceLocation
-            }
+            position={ambulanceLocation}
             icon={ambulanceIcon}
           >
 
@@ -1362,14 +1358,14 @@ export default function LiveMap({ onStopGPS, onLogout }) {
               🚑{" "}
 
               <b>
-                Ambulance {AMBULANCE_ID}
+                Ambulance {deviceAmbulanceId}
               </b>
 
               <br />
 
               {actualAmbulanceGPS
                 ? "LIVE GPS"
-                : "Demo / Waiting for GPS"}
+                : "Waiting for real GPS"}
 
               {ambulanceHeading !== null && (
                 <>
@@ -1380,6 +1376,7 @@ export default function LiveMap({ onStopGPS, onLogout }) {
             </Popup>
 
           </Marker>
+          )}
 
           {/* ===========================================
               ALL LIVE AMBULANCES
@@ -1387,7 +1384,7 @@ export default function LiveMap({ onStopGPS, onLogout }) {
 
           {Object.values(ambulanceLocations).map((amb) => {
             const position = [Number(amb.latitude), Number(amb.longitude)];
-            const isPrimary = amb.ambulanceId === AMBULANCE_ID;
+            const isPrimary = amb.ambulanceId === deviceAmbulanceId;
             return (
               <Marker
                 key={`ambulance-${amb.ambulanceId}`}
@@ -1404,7 +1401,7 @@ export default function LiveMap({ onStopGPS, onLogout }) {
                   {amb.destination && (<>
                     <br />🏥 {amb.destination}
                   </>)}
-                  {isPrimary && <><br />⭐ Primary demo ambulance</>}
+                  {isPrimary && <><br />⭐ This device</>}
                 </Popup>
               </Marker>
             );
@@ -1416,7 +1413,7 @@ export default function LiveMap({ onStopGPS, onLogout }) {
 
           <Marker
             position={
-              DEMO_HOSPITAL
+              HOSPITAL_LOCATION
             }
             icon={hospitalIcon}
           >
@@ -1426,7 +1423,7 @@ export default function LiveMap({ onStopGPS, onLogout }) {
               🏥{" "}
 
               <b>
-                {DEMO_HOSPITAL_NAME}
+                {HOSPITAL_LOCATION_NAME}
               </b>
 
               <br />
@@ -1595,22 +1592,6 @@ export default function LiveMap({ onStopGPS, onLogout }) {
           {Object.keys(ambulanceLocations).length > 1 && " • Multiple ambulance tracking enabled"}
         </div>
 
-        <div style={{ marginTop: "10px", marginBottom: "10px" }}>
-          <button
-            onClick={sendDemoFleet}
-            style={{
-              padding: "10px 14px",
-              borderRadius: "10px",
-              border: "1px solid #cbd5e1",
-              background: "#eef6ff",
-              cursor: "pointer",
-              fontWeight: 700,
-            }}
-          >
-            🧪 Send 5 Demo Ambulances (AMB102–AMB106)
-          </button>
-        </div>
-
         {Object.keys(ambulanceAlerts).length > 0 && (
           <div className="alert">
             <h3>🚨 Traffic Alerts — All Ambulances</h3>
@@ -1749,7 +1730,7 @@ export default function LiveMap({ onStopGPS, onLogout }) {
                 🚑 Ambulance{" "}
 
                 <b>
-                  {AMBULANCE_ID}
+                  {deviceAmbulanceId}
                 </b>
 
                 {" "}is within{" "}
@@ -1808,7 +1789,7 @@ export default function LiveMap({ onStopGPS, onLogout }) {
 
                 <b>
                   {trafficPoliceAlert?.destination ||
-                    DEMO_HOSPITAL_NAME}
+                    HOSPITAL_LOCATION_NAME}
                 </b>
 
               </div>
@@ -2020,7 +2001,7 @@ export default function LiveMap({ onStopGPS, onLogout }) {
             </span>
 
             <strong>
-              {AMBULANCE_ID}
+              {deviceAmbulanceId}
             </strong>
 
           </div>
@@ -2032,7 +2013,7 @@ export default function LiveMap({ onStopGPS, onLogout }) {
             </span>
 
             <strong>
-              {DEMO_HOSPITAL_NAME}
+              {HOSPITAL_LOCATION_NAME}
             </strong>
 
           </div>
