@@ -2,111 +2,110 @@ import React, { useState } from "react";
 import LiveMap from "./LiveMap";
 import TrafficPoliceTracker from "./TrafficPoliceTracker";
 
+function getAmbulanceIdFromUrl() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const id = (params.get("ambulanceId") || "").trim().toUpperCase();
+    if (/^AMB[A-Z0-9_-]+$/.test(id)) return id;
+  } catch {}
+  return "";
+}
+
 export default function App() {
-  const [role, setRole] = useState(null);
+  const [policeMode, setPoliceMode] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
   const [logoutNonce, setLogoutNonce] = useState(0);
+  const [policeLocation, setPoliceLocation] = useState(null);
+  const ambulanceId = getAmbulanceIdFromUrl();
 
-  // START LIVE GPS के बाद Map खोलना
-  const openMap = () => {
-    setMapOpen(true);
-  };
+  // Ambulance URL mode is kept separate from Police login.
+  // Example: ?ambulanceId=AMB102
+  if (ambulanceId) {
+    return (
+      <main className="app">
+        <header>
+          <h1>🚑 EMMC — Ambulance GPS</h1>
+          <p>Ambulance {ambulanceId} • Real Device GPS Tracking</p>
+        </header>
+        <LiveMap
+          ambulanceMode={true}
+          gpsEnabled={true}
+          ambulanceId={ambulanceId}
+          onStopGPS={() => {}}
+          onLogout={() => {}}
+        />
+      </main>
+    );
+  }
 
-  // Map से STOP GPS करने पर Police Dashboard पर वापस
-  const stopGPSAndReturn = () => {
+  const handleStartMap = () => setMapOpen(true);
+
+  const handleStopMap = () => {
     setMapOpen(false);
   };
 
-  // Map से Logout करने पर Login page
-  const logoutToLogin = () => {
+  const handlePoliceLogout = () => {
     setMapOpen(false);
-    setRole(null);
     setLogoutNonce((n) => n + 1);
   };
 
-  // =====================================================
-  // POLICE MODE
-  // =====================================================
-
-  if (role === "police") {
+  if (policeMode) {
     return (
       <main className="app">
         <header>
           <h1>🚔 EMMC — Traffic Police</h1>
-
-          <p>
-            Authorized Police Login • Real GPS • 1 KM Ambulance Alert
-          </p>
+          <p>Authorized Police Login • Real GPS • Live Ambulance Distance • 1 KM Alert</p>
         </header>
 
-        {!mapOpen ? (
+        {/* Keep the tracker mounted while the map is open so its REAL police GPS
+            continues sending to the shared EMMC backend. */}
+        <div style={{ display: mapOpen ? "none" : "block" }}>
           <TrafficPoliceTracker
-            onStartMap={openMap}
+            onStartMap={handleStartMap}
+            onPoliceLocationChange={setPoliceLocation}
             mapOpen={mapOpen}
             logoutNonce={logoutNonce}
           />
-        ) : (
+        </div>
+
+        {mapOpen && (
           <LiveMap
-            onStopGPS={stopGPSAndReturn}
-            onLogout={logoutToLogin}
+            ambulanceMode={false}
+            gpsEnabled={false}
+            onStopGPS={handleStopMap}
+            onLogout={handlePoliceLogout}
+            policeLocation={policeLocation}
+            policeLive={!!policeLocation}
           />
+        )}
+
+        {!mapOpen && (
+          <button
+            onClick={() => setPoliceMode(false)}
+            style={{ marginTop: 16, padding: "10px 16px", borderRadius: 10, border: "1px solid #cbd5e1", background: "#fff", cursor: "pointer" }}
+          >
+            ← Back to Police Login
+          </button>
         )}
       </main>
     );
   }
 
-  // =====================================================
-  // POLICE LOGIN PAGE
-  // =====================================================
-
   return (
     <main className="app">
       <header>
-        <h1>🚨 EMMC Emergency GPS System</h1>
-
-        <p>
-          Authorized Traffic Police Access
-        </p>
+        <h1>🚔 EMMC — Traffic Police Login</h1>
+        <p>Authorized Traffic Police • Real GPS • Emergency Traffic Alerts</p>
       </header>
-
-      <section
-        style={{
-          maxWidth: "520px",
-          margin: "24px auto",
-        }}
-      >
-        <div
-          style={{
-            background: "#fff",
-            padding: "22px",
-            borderRadius: "16px",
-            boxShadow:
-              "0 4px 20px rgba(0,0,0,.12)",
-          }}
+      <section style={{ maxWidth: "520px", margin: "32px auto", background: "#fff", padding: "24px", borderRadius: "16px", boxShadow: "0 4px 20px rgba(0,0,0,.12)" }}>
+        <h2>Traffic Police Access</h2>
+        <p>Login with your authorized Police ID. Ambulance devices use their separate dashboard.</p>
+        <button
+          onClick={() => setPoliceMode(true)}
+          style={{ width: "100%", padding: "13px", border: 0, borderRadius: "10px", cursor: "pointer", fontWeight: 700 }}
         >
-          <h2>🚔 Traffic Police Login</h2>
-
-          <p>
-            Police ID login opens only the Traffic
-            Police dashboard.
-          </p>
-
-          <button
-            onClick={() => setRole("police")}
-            style={{
-              width: "100%",
-              padding: "13px",
-              border: "none",
-              borderRadius: "10px",
-              background: "#2563eb",
-              color: "white",
-              fontWeight: "bold",
-              cursor: "pointer",
-            }}
-          >
-            Open Traffic Police Login
-          </button>
-        </div>
+          🚔 Open Traffic Police Login
+        </button>
       </section>
     </main>
   );
