@@ -1,23 +1,49 @@
 import React, { useState } from "react";
+import LiveMap from "./LiveMap";
 import TrafficPoliceTracker from "./TrafficPoliceTracker";
 
 export default function App() {
   const [role, setRole] = useState(null);
+  const [mapOpen, setMapOpen] = useState(false);
+  const [logoutNonce, setLogoutNonce] = useState(0);
 
-  // POLICE DASHBOARD
+  const openMap = () => {
+    setMapOpen(true);
+  };
+
+  const stopGPSAndReturn = () => {
+    setMapOpen(false);
+  };
+
+  const logoutToLogin = () => {
+    setMapOpen(false);
+    setRole(null);
+    setLogoutNonce((n) => n + 1);
+  };
+
+  // POLICE DASHBOARD + MAP
   if (role === "police") {
     return (
       <main className="app">
         <header>
           <h1>🚔 EMMC — Traffic Police</h1>
-          <p>Authorized Police Login • Real GPS • 1 KM Ambulance Alert</p>
+          <p>
+            Authorized Police Login • Real GPS • 1 KM Ambulance Alert
+          </p>
         </header>
 
-        <TrafficPoliceTracker
-          onStartMap={() => {}}
-          mapOpen={false}
-          logoutNonce={0}
-        />
+        {!mapOpen ? (
+          <TrafficPoliceTracker
+            onStartMap={openMap}
+            mapOpen={mapOpen}
+            logoutNonce={logoutNonce}
+          />
+        ) : (
+          <LiveMap
+            onStopGPS={stopGPSAndReturn}
+            onLogout={logoutToLogin}
+          />
+        )}
       </main>
     );
   }
