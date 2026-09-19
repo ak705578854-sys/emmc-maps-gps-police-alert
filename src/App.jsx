@@ -7,26 +7,33 @@ export default function App() {
   const [mapOpen, setMapOpen] = useState(false);
   const [logoutNonce, setLogoutNonce] = useState(0);
 
+  // START LIVE GPS के बाद Map खोलना
   const openMap = () => {
     setMapOpen(true);
   };
 
+  // Map से STOP GPS करने पर Police Dashboard पर वापस
   const stopGPSAndReturn = () => {
     setMapOpen(false);
   };
 
+  // Map से Logout करने पर Login page
   const logoutToLogin = () => {
     setMapOpen(false);
     setRole(null);
     setLogoutNonce((n) => n + 1);
   };
 
-  // POLICE DASHBOARD + MAP
+  // =====================================================
+  // POLICE MODE
+  // =====================================================
+
   if (role === "police") {
     return (
       <main className="app">
         <header>
           <h1>🚔 EMMC — Traffic Police</h1>
+
           <p>
             Authorized Police Login • Real GPS • 1 KM Ambulance Alert
           </p>
@@ -48,20 +55,24 @@ export default function App() {
     );
   }
 
-  // ONLY POLICE LOGIN
+  // =====================================================
+  // POLICE LOGIN PAGE
+  // =====================================================
+
   return (
     <main className="app">
       <header>
         <h1>🚨 EMMC Emergency GPS System</h1>
-        <p>Authorized Traffic Police Access</p>
+
+        <p>
+          Authorized Traffic Police Access
+        </p>
       </header>
 
       <section
         style={{
           maxWidth: "520px",
           margin: "24px auto",
-          display: "grid",
-          gap: "18px",
         }}
       >
         <div
@@ -69,13 +80,15 @@ export default function App() {
             background: "#fff",
             padding: "22px",
             borderRadius: "16px",
-            boxShadow: "0 4px 20px rgba(0,0,0,.12)",
+            boxShadow:
+              "0 4px 20px rgba(0,0,0,.12)",
           }}
         >
           <h2>🚔 Traffic Police Login</h2>
 
           <p>
-            Police ID login opens only the Traffic Police dashboard.
+            Police ID login opens only the Traffic
+            Police dashboard.
           </p>
 
           <button
@@ -83,10 +96,12 @@ export default function App() {
             style={{
               width: "100%",
               padding: "13px",
-              border: 0,
+              border: "none",
               borderRadius: "10px",
+              background: "#2563eb",
+              color: "white",
+              fontWeight: "bold",
               cursor: "pointer",
-              fontWeight: 700,
             }}
           >
             Open Traffic Police Login
