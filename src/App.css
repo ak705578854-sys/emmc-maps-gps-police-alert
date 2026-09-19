@@ -27,3 +27,14 @@
   0%, 100% { opacity: .78; transform: scale(.92); }
   50% { opacity: 1; transform: scale(1.08); }
 }
+
+
+/* Police controls shown at the top of the EMMC map dashboard */
+.map-top-controls{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:#ffffff;border-bottom:1px solid #e5e7eb;flex-wrap:wrap}
+.map-live-label{font-weight:700;color:#1f2937}
+.map-control-buttons{display:flex;gap:8px;flex-wrap:wrap}
+.map-stop-button,.map-logout-button{border:0;border-radius:9px;padding:10px 14px;color:#fff;font-weight:700;cursor:pointer}
+.map-stop-button{background:#dc2626}
+.map-logout-button{background:#374151}
+.map-stop-button:hover,.map-logout-button:hover{filter:brightness(.95)}
+@media(max-width:700px){.map-top-controls{align-items:stretch}.map-live-label{width:100%}.map-control-buttons{width:100%}.map-stop-button,.map-logout-button{flex:1}}
