@@ -189,9 +189,9 @@ const movingAmbulanceArrowIcon = (rotation) => L.divIcon({
   iconAnchor: [22, 22],
 });
 
-const arrowIcon = (rotation) => L.divIcon({
+const arrowIcon = (rotation, color = "#2563eb") => L.divIcon({
   className: "route-arrow-marker",
-  html: `<div style="transform: rotate(${rotation}deg); font-size:22px; font-weight:900; color:#2563eb; text-shadow:0 1px 3px rgba(255,255,255,.95); line-height:1;">➤</div>`,
+  html: `<div style="transform: rotate(${rotation}deg); font-size:22px; font-weight:900; color:${color}; text-shadow:0 1px 3px rgba(255,255,255,.95); line-height:1;">➤</div>`,
   iconSize: [24, 24],
   iconAnchor: [12, 12],
 });
@@ -225,6 +225,16 @@ function formatDistance(km) {
   }
 
   return `${km.toFixed(2)} km`;
+}
+
+function getActiveAmbulances(ambulanceLocations) {
+  const now = Date.now();
+  const ACTIVE_WINDOW_MS = 90000;
+  return Object.values(ambulanceLocations).filter((amb) => {
+    const updatedAt = Number(amb?.updatedAt || 0);
+    return isValidCoordinate(Number(amb?.latitude), Number(amb?.longitude)) &&
+      updatedAt > 0 && now - updatedAt <= ACTIVE_WINDOW_MS;
+  });
 }
 
 // =====================================================
@@ -319,6 +329,14 @@ export default function LiveMap({ onStopGPS, onLogout, ambulanceId = "", ambulan
     useState("Connecting to backend...");
 
   const routeArrows = useMemo(() => getRouteArrows(route), [route]);
+  const activeAmbulances = useMemo(() => getActiveAmbulances(ambulanceLocations), [ambulanceLocations]);
+  const activePrimaryAmbulance = useMemo(() => activeAmbulances.reduce((latest, amb) => (!latest || Number(amb.updatedAt) > Number(latest.updatedAt) ? amb : latest), null), [activeAmbulances]);
+  const priorityColor = useMemo(() => {
+    const level =
+      (activePrimaryAmbulance?.priorityLevel || 'red').toLowerCase();
+    return activePrimaryAmbulance?.priorityColor ||
+      ({ red: '#dc2626', orange: '#ea580c', green: '#16a34a' }[level] || '#dc2626');
+  }, [activePrimaryAmbulance]);
 
   // ===================================================
   // AMBULANCE LOCATION FOR MAP
@@ -969,23 +987,36 @@ export default function LiveMap({ onStopGPS, onLogout, ambulanceId = "", ambulan
     getPoliceLocation();
 
     // Load all ambulances that were already online before this map opened.
-    fetch(`${BACKEND_URL}/api/ambulances`)
-      .then((response) => {
+    const loadAmbulances = async () => {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/ambulances`, { cache: 'no-store' });
         if (!response.ok) throw new Error(`Backend returned ${response.status}`);
-        return response.json();
-      })
-      .then((data) => {
+        const data = await response.json();
         const list = Array.isArray(data?.ambulances) ? data.ambulances : [];
         const next = {};
         for (const amb of list) {
           const id = amb?.ambulanceId;
           if (id && isValidCoordinate(Number(amb.latitude), Number(amb.longitude))) {
-            next[String(id)] = { ...amb, latitude: Number(amb.latitude), longitude: Number(amb.longitude) };
+            next[String(id)] = {
+              ...amb,
+              latitude: Number(amb.latitude),
+              longitude: Number(amb.longitude),
+              updatedAt: Number(amb.updatedAt || amb.lastUpdated || Date.now()),
+            };
           }
         }
         setAmbulanceLocations(next);
-      })
-      .catch((error) => console.warn("All ambulances request failed:", error.message));
+      } catch (error) {
+        console.warn('All ambulances request failed:', error.message);
+      }
+    };
+
+    loadAmbulances();
+    const ambulanceRefresh = window.setInterval(loadAmbulances, 5000);
+
+    return () => {
+      window.clearInterval(ambulanceRefresh);
+    };
 
   }, []);
 
@@ -1181,17 +1212,36 @@ export default function LiveMap({ onStopGPS, onLogout, ambulanceId = "", ambulan
 
     async function getRoute() {
 
+      // Police dashboard receives ambulance GPS over the backend.
+      // Use the primary ambulance location when available; otherwise
+      // fall back to the first live ambulance received from the backend.
+      const firstLiveAmbulance = activePrimaryAmbulance;
+
+      const routeStart = isValidLocation(ambulanceLocation)
+        ? ambulanceLocation
+        : (firstLiveAmbulance
+            ? [Number(firstLiveAmbulance.latitude), Number(firstLiveAmbulance.longitude)]
+            : null);
+
+      if (!routeStart) {
+        setRoute([]);
+        setDistance(null);
+        setDuration(null);
+        setRouteStatus("Waiting for ambulance GPS...");
+        return;
+      }
+
       try {
 
         setRouteStatus(
-          "Recalculating route..."
+          "Calculating route..."
         );
 
         const [
           fromLat,
           fromLng,
         ] =
-          ambulanceLocation;
+          routeStart;
 
         const [
           toLat,
@@ -1200,9 +1250,11 @@ export default function LiveMap({ onStopGPS, onLogout, ambulanceId = "", ambulan
           HOSPITAL_LOCATION;
 
         const url =
-          `https://router.project-osrm.org/route/v1/driving/` +
-          `${fromLng},${fromLat};${toLng},${toLat}` +
-          `?overview=full&geometries=geojson`;
+          `${BACKEND_URL}/api/route` +
+          `?fromLat=${fromLat}` +
+          `&fromLng=${fromLng}` +
+          `&toLat=${toLat}` +
+          `&toLng=${toLng}`;
 
         const response =
           await fetch(
@@ -1306,6 +1358,8 @@ export default function LiveMap({ onStopGPS, onLogout, ambulanceId = "", ambulan
 
   }, [
     ambulanceLocation,
+    ambulanceLocations,
+    priorityColor,
   ]);
 
   // ===================================================
@@ -1395,7 +1449,7 @@ export default function LiveMap({ onStopGPS, onLogout, ambulanceId = "", ambulan
               ALL LIVE AMBULANCES
           =========================================== */}
 
-          {Object.values(ambulanceLocations).map((amb) => {
+          {activeAmbulances.map((amb) => {
             const position = [Number(amb.latitude), Number(amb.longitude)];
             const isPrimary = amb.ambulanceId === deviceAmbulanceId;
             return (
@@ -1561,6 +1615,7 @@ export default function LiveMap({ onStopGPS, onLogout, ambulanceId = "", ambulan
               }
               pathOptions={{
                 weight: 5,
+                color: priorityColor,
               }}
             />
 
@@ -1571,7 +1626,7 @@ export default function LiveMap({ onStopGPS, onLogout, ambulanceId = "", ambulan
             <Marker
               key={arrow.key}
               position={arrow.position}
-              icon={arrowIcon(arrow.rotation)}
+              icon={arrowIcon(arrow.rotation, priorityColor)}
               interactive={false}
             />
           ))}
@@ -1607,18 +1662,22 @@ export default function LiveMap({ onStopGPS, onLogout, ambulanceId = "", ambulan
         ============================================= */}
 
         <div className="status" style={{ marginTop: "8px" }}>
-          🚑 <b>Ambulances Online:</b> {Object.keys(ambulanceLocations).length}
-          {Object.keys(ambulanceLocations).length > 1 && " • Multiple ambulance tracking enabled"}
+          🚑 <b>Active Ambulance:</b> {activePrimaryAmbulance?.ambulanceId || "Waiting for ambulance GPS"}
+          {activePrimaryAmbulance && (
+            <span style={{ marginLeft: 10, color: activePrimaryAmbulance.priorityColor || priorityColor, fontWeight: 800 }}>
+              ● {String(activePrimaryAmbulance.priorityLevel || 'red').toUpperCase()} PRIORITY
+            </span>
+          )}
         </div>
 
         <div className="status" style={{ marginTop: "8px" }}>
           🚔 <b>Police {AUTHORIZED_POLICE_ID}:</b> {trafficPoliceLive ? "🟢 LIVE GPS" : "🟡 Waiting for GPS"}
         </div>
 
-        {trafficPoliceLive && isValidLocation(trafficPoliceLocation) && Object.values(ambulanceLocations).length > 0 && (
+        {trafficPoliceLive && isValidLocation(trafficPoliceLocation) && activeAmbulances.length > 0 && (
           <div className="status" style={{ marginTop: "8px" }}>
-            <b>📏 Actual Ambulance → Police Distance</b>
-            {Object.values(ambulanceLocations).map((amb) => {
+            <b>📏 Logged-in Ambulance → Police Distance</b>
+            {activeAmbulances.map((amb) => {
               const d = distanceKm([Number(amb.latitude), Number(amb.longitude)], trafficPoliceLocation);
               const inside = d !== null && d <= POLICE_ALERT_RADIUS_KM;
               return (
